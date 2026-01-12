@@ -17,7 +17,6 @@ namespace Setto.SDK
     [Serializable]
     public class SettoConfig
     {
-        public string merchantId;
         public SettoEnvironment environment;
         public string idpToken; // IdP 토큰 (있으면 자동로그인)
         public bool debug;
@@ -25,12 +24,6 @@ namespace Setto.SDK
         public string BaseURL => environment == SettoEnvironment.Dev
             ? "https://dev-wallet.settopay.com"
             : "https://wallet.settopay.com";
-
-        /// <summary>
-        /// URL Scheme (딥링크 콜백용)
-        /// 형식: setto-{merchantId}://callback
-        /// </summary>
-        public string URLScheme => $"setto-{merchantId}";
     }
 
     public enum PaymentStatus
@@ -112,7 +105,7 @@ namespace Setto.SDK
         public void Initialize(SettoConfig config)
         {
             _config = config;
-            DebugLog($"Initialized - merchantId: {config.merchantId}, environment: {config.environment}");
+            DebugLog($"Initialized - environment: {config.environment}");
 
 #if UNITY_ANDROID && !UNITY_EDITOR
             DebugLog("Android: Make sure to register URL Scheme in AndroidManifest.xml");
@@ -127,7 +120,7 @@ namespace Setto.SDK
         /// - IdP Token 없음: Setto 로그인 필요
         /// - IdP Token 있음: PaymentToken 발급 후 자동로그인
         /// </summary>
-        public void OpenPayment(string amount, string orderId, Action<PaymentResult> callback)
+        public void OpenPayment(string merchantId, string amount, string orderId, Action<PaymentResult> callback)
         {
             if (_config == null)
             {
@@ -143,12 +136,12 @@ namespace Setto.SDK
             {
                 // IdP Token 있음 → PaymentToken 발급 → Fragment로 전달
                 DebugLog("Requesting PaymentToken for auto-login...");
-                StartCoroutine(RequestPaymentTokenAndOpen(amount, orderId, callback));
+                StartCoroutine(RequestPaymentTokenAndOpen(merchantId, amount, orderId, callback));
             }
             else
             {
                 // IdP Token 없음 → Query param으로 직접 전달
-                var url = BuildPaymentURL(amount, orderId);
+                var url = BuildPaymentURL(merchantId, amount, orderId);
                 DebugLog($"Opening payment (Setto login required): {url}");
                 OpenPaymentInternal(url, callback);
             }
@@ -198,9 +191,9 @@ namespace Setto.SDK
 
         // MARK: - Internal
 
-        private string BuildPaymentURL(string amount, string orderId)
+        private string BuildPaymentURL(string merchantId, string amount, string orderId)
         {
-            var url = $"{_config.BaseURL}/pay/wallet?merchant_id={Uri.EscapeDataString(_config.merchantId)}&amount={Uri.EscapeDataString(amount)}";
+            var url = $"{_config.BaseURL}/pay/wallet?merchant_id={Uri.EscapeDataString(merchantId)}&amount={Uri.EscapeDataString(amount)}";
 
             if (!string.IsNullOrEmpty(orderId))
             {
@@ -209,22 +202,22 @@ namespace Setto.SDK
 
             // 모바일: 콜백 URL Scheme 추가
 #if (UNITY_IOS || UNITY_ANDROID) && !UNITY_EDITOR
-            url += $"&callback_scheme={Uri.EscapeDataString(_config.URLScheme)}";
+            url += $"&callback_scheme={Uri.EscapeDataString($"setto-{merchantId}")}";
 #endif
 
             return url;
         }
 
-        private IEnumerator RequestPaymentTokenAndOpen(string amount, string orderId, Action<PaymentResult> callback)
+        private IEnumerator RequestPaymentTokenAndOpen(string merchantId, string amount, string orderId, Action<PaymentResult> callback)
         {
             var tokenUrl = $"{_config.BaseURL}/api/external/payment/token";
 
             var body = new PaymentTokenRequest
             {
-                merchantId = _config.merchantId,
+                merchant_id = merchantId,
                 amount = amount,
-                orderId = orderId,
-                idpToken = _config.idpToken
+                order_id = orderId,
+                idp_token = _config.idpToken
             };
             var jsonBody = JsonUtility.ToJson(body);
 
@@ -250,7 +243,7 @@ namespace Setto.SDK
 
                 var response = JsonUtility.FromJson<PaymentTokenResponse>(request.downloadHandler.text);
 
-                if (string.IsNullOrEmpty(response.paymentToken))
+                if (string.IsNullOrEmpty(response.payment_token))
                 {
                     DebugLog("PaymentToken is empty in response");
                     callback?.Invoke(new PaymentResult
@@ -262,11 +255,11 @@ namespace Setto.SDK
                 }
 
                 // Fragment로 전달 (보안: 서버 로그에 남지 않음)
-                var url = $"{_config.BaseURL}/pay/wallet#pt={Uri.EscapeDataString(response.paymentToken)}";
+                var url = $"{_config.BaseURL}/pay/wallet#pt={Uri.EscapeDataString(response.payment_token)}";
 
                 // 모바일: 콜백 URL Scheme 추가 (Fragment 뒤에)
 #if (UNITY_IOS || UNITY_ANDROID) && !UNITY_EDITOR
-                url += $"&callback_scheme={Uri.EscapeDataString(_config.URLScheme)}";
+                url += $"&callback_scheme={Uri.EscapeDataString($"setto-{merchantId}")}";
 #endif
 
                 DebugLog("Opening payment with auto-login");
@@ -277,16 +270,16 @@ namespace Setto.SDK
         [Serializable]
         private class PaymentTokenRequest
         {
-            public string merchantId;
+            public string merchant_id;
             public string amount;
-            public string orderId;
-            public string idpToken;
+            public string order_id;
+            public string idp_token;
         }
 
         [Serializable]
         private class PaymentTokenResponse
         {
-            public string paymentToken;
+            public string payment_token;
         }
 
         private void OpenPaymentInternal(string url, Action<PaymentResult> callback)
