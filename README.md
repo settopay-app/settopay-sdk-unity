@@ -1,229 +1,190 @@
 # Setto SDK for Unity
 
-Setto Unity SDK - 시스템 브라우저 및 WebGL 기반 결제 연동 SDK
-
-## 요구사항
-
-- Unity 2019.4+
+Unity 게임에서 Setto 결제를 연동하기 위한 SDK입니다.
 
 ## 지원 플랫폼
 
-| 플랫폼 | 방식 | 결과 수신 |
-|--------|------|-----------|
-| iOS | 시스템 브라우저 | Custom URL Scheme |
-| Android | 시스템 브라우저 | Custom URL Scheme |
-| Windows/Mac | 시스템 브라우저 | Custom URL Scheme |
-| WebGL | iframe + postMessage | JavaScript 콜백 |
+| 플랫폼 | 지원 | 결제 방식 |
+|--------|------|----------|
+| WebGL | ✅ | iframe + postMessage |
+| iOS | ✅ | SFSafariViewController + URL Scheme |
+| Android | ✅ | Chrome Custom Tabs + URL Scheme |
+| Desktop (Editor) | ⚠️ | 시스템 브라우저 (콜백 미지원) |
 
 ## 설치
 
-### Unity Package Manager (Git URL)
+### Unity Package Manager (권장)
 
-1. Window → Package Manager
-2. + 버튼 → Add package from git URL...
-3. URL 입력: `https://github.com/settopay-app/setto-unity-sdk.git`
+1. Unity Editor에서 `Window > Package Manager` 열기
+2. `+` 버튼 클릭 → `Add package from git URL...`
+3. 다음 URL 입력:
+   ```
+   https://github.com/anthropics/setto-sdk-unity.git
+   ```
 
-### Manual Installation
+### 수동 설치
 
-1. 이 폴더를 `Assets/Plugins/SettoSDK`에 복사
+1. 이 저장소를 다운로드
+2. `Runtime` 폴더를 Unity 프로젝트의 `Assets/Plugins/Setto` 폴더에 복사
 
-## 설정
+## 사용법
 
-### 모바일/PC - Custom URL Scheme
+### 1. SDK 초기화
 
-앱/PC 빌드에서는 Deep Link로 결과를 수신합니다.
+```csharp
+using Setto.SDK;
 
-#### iOS
+void Start()
+{
+    var config = new SettoConfig
+    {
+        merchantId = "YOUR_MERCHANT_ID",
+        environment = SettoEnvironment.Dev, // 또는 Prod
+        // idpToken = "firebase-id-token", // 선택: 있으면 자동로그인
+        debug = true
+    };
 
-Build Settings → Player Settings → Other Settings → Supported URL Schemes에 추가:
+    SettoSDK.Instance.Initialize(config);
+}
 ```
-mygame
+
+### 2. 결제 요청
+
+```csharp
+public void OnPayButtonClicked()
+{
+    SettoSDK.Instance.OpenPayment(
+        amount: "10",           // USD 금액
+        orderId: "order-123",   // 선택: 주문 ID
+        callback: OnPaymentResult
+    );
+}
+
+private void OnPaymentResult(PaymentResult result)
+{
+    switch (result.status)
+    {
+        case PaymentStatus.Success:
+            Debug.Log($"Payment Success! TxHash: {result.txHash}");
+            break;
+        case PaymentStatus.Failed:
+            Debug.LogError($"Payment Failed: {result.error}");
+            break;
+        case PaymentStatus.Cancelled:
+            Debug.Log("Payment Cancelled");
+            break;
+    }
+}
 ```
 
-또는 Xcode에서 Info.plist 직접 수정:
+## 자동로그인 (IdP Token)
+
+고객사 게임에서 이미 Firebase 등으로 사용자 인증이 되어 있다면, IdP Token을 전달하여 Setto 로그인을 스킵할 수 있습니다.
+
+```csharp
+var config = new SettoConfig
+{
+    merchantId = "YOUR_MERCHANT_ID",
+    environment = SettoEnvironment.Dev,
+    idpToken = firebaseIdToken, // Firebase ID Token
+    debug = true
+};
+
+SettoSDK.Instance.Initialize(config);
+```
+
+- IdP Token 없음: Setto 로그인 화면 표시
+- IdP Token 있음: 로그인 스킵, 바로 지갑 선택 화면
+
+## 플랫폼별 설정
+
+### iOS
+
+`Info.plist`에 URL Scheme 등록:
+
 ```xml
 <key>CFBundleURLTypes</key>
 <array>
     <dict>
         <key>CFBundleURLSchemes</key>
         <array>
-            <string>mygame</string>
+            <string>setto-YOUR_MERCHANT_ID</string>
         </array>
     </dict>
 </array>
 ```
 
-#### Android
+`AppDelegate.mm`에서 딥링크 처리:
 
-`Assets/Plugins/Android/AndroidManifest.xml`:
+```objc
+- (BOOL)application:(UIApplication *)app openURL:(NSURL *)url options:(NSDictionary *)options {
+    if ([url.scheme hasPrefix:@"setto-"]) {
+        SettoSDK_iOS_HandleURL([url.absoluteString UTF8String]);
+        return YES;
+    }
+    return NO;
+}
+```
+
+### Android
+
+`AndroidManifest.xml`에 URL Scheme 등록:
+
 ```xml
-<activity android:name="com.unity3d.player.UnityPlayerActivity"
-    android:launchMode="singleTask">
+<activity android:name="com.unity3d.player.UnityPlayerActivity" ...>
     <intent-filter>
         <action android:name="android.intent.action.VIEW" />
         <category android:name="android.intent.category.DEFAULT" />
         <category android:name="android.intent.category.BROWSABLE" />
-        <data android:scheme="mygame" />
+        <data android:scheme="setto-YOUR_MERCHANT_ID" android:host="callback" />
     </intent-filter>
 </activity>
 ```
 
-#### Windows/Mac
+`build.gradle`에 Chrome Custom Tabs 의존성 추가:
 
-Installer에서 레지스트리(Windows) 또는 Info.plist(Mac) 설정 필요.
-
-### Deep Link 수신 (네이티브 플러그인)
-
-Unity에서 Deep Link를 수신하려면 플랫폼별 네이티브 코드가 필요합니다.
-자세한 내용은 [Multi-Platform 기술 가이드](../../docs/multi_platform_details.md)를 참조하세요.
-
-간단한 방법: [Unity Deep Linking 에셋](https://assetstore.unity.com/)을 사용하여 `SettoSDK.Instance.HandleDeepLink(url)` 호출
-
-## 사용법
-
-### SDK 초기화
-
-```csharp
-using Setto.SDK;
-
-public class GameManager : MonoBehaviour
-{
-    void Start()
-    {
-        SettoSDK.Instance.Initialize(
-            merchantId: "your-merchant-id",
-            environment: SettoEnvironment.Production,
-            returnScheme: "mygame"  // WebGL에서는 무시됨
-        );
-    }
+```gradle
+dependencies {
+    implementation 'androidx.browser:browser:1.5.0'
 }
 ```
 
-### 결제 요청
+딥링크 처리 (Unity 2019.4+에서는 자동 처리됨):
 
 ```csharp
-using Setto.SDK;
-
-public void HandlePayment()
+// Application.deepLinkActivated 이벤트 사용
+void OnEnable()
 {
-    var paymentParams = new PaymentParams
-    {
-        OrderId = "order-123",
-        Amount = 100.00m,
-        Currency = "USD",       // 선택
-        IdpToken = idpToken     // WebGL 전용 (선택, 아래 참고)
-    };
-
-    SettoSDK.Instance.OpenPayment(paymentParams, result =>
-    {
-        switch (result.Status)
-        {
-            case PaymentStatus.Success:
-                Debug.Log($"결제 성공! TX ID: {result.txId}");
-                // 서버에서 결제 검증 필수!
-                break;
-
-            case PaymentStatus.Cancelled:
-                Debug.Log("사용자가 결제를 취소했습니다.");
-                break;
-
-            case PaymentStatus.Failed:
-                Debug.LogError($"결제 실패: {result.error}");
-                break;
-        }
-    });
+    Application.deepLinkActivated += OnDeepLinkActivated;
 }
-```
 
-### WebGL에서 IdpToken 동작
-
-WebGL 빌드에서 `IdpToken` 파라미터는 선택사항입니다:
-
-| IdpToken | wallet.settopay.com 동작 |
-|----------|-------------------------|
-| **전달됨** | IdP Token 검증 → 즉시 결제 화면 표시 (로그인 불필요) |
-| **미전달** | Setto 자체 OAuth 로그인 화면 표시 → 로그인 후 결제 진행 |
-
-자체 IdP(Firebase, Cognito 등)가 없는 경우 IdpToken을 전달하지 않으면 Setto 자체 로그인으로 진행됩니다.
-
-> **참고**: 앱/PC 빌드에서는 시스템 브라우저가 열리므로 브라우저 세션이 유지됩니다. IdpToken은 WebGL 전용입니다.
-
-### Deep Link 처리 (앱/PC)
-
-앱/PC에서 Deep Link로 결과를 수신하면 `HandleDeepLink`를 호출합니다:
-
-```csharp
-// 플랫폼별 Deep Link 수신 후 호출
-public void OnDeepLinkReceived(string url)
+void OnDeepLinkActivated(string url)
 {
     SettoSDK.Instance.HandleDeepLink(url);
 }
 ```
 
-## API
+### WebGL
 
-### SettoSDK
+추가 설정 없이 바로 동작합니다.
 
-#### `Initialize(merchantId, environment, returnScheme)`
+## 샘플
 
-SDK를 초기화합니다.
+Package Manager에서 `Samples` 섹션의 `Basic Example`을 Import하면 바로 테스트 가능한 예제를 확인할 수 있습니다.
 
-| 파라미터 | 타입 | 설명 |
-|---------|------|------|
-| `merchantId` | `string` | 고객사 ID |
-| `environment` | `SettoEnvironment` | `Development` 또는 `Production` |
-| `returnScheme` | `string` | Custom URL Scheme (WebGL에서는 무시) |
+## 요구사항
 
-#### `OpenPayment(params, onComplete)`
+- Unity 2021.3 이상
+- iOS: iOS 12.0 이상
+- Android: API Level 21 이상
 
-결제 창을 열고 결제를 진행합니다.
+## 주의사항
 
-| 파라미터 | 타입 | 설명 |
-|---------|------|------|
-| `params` | `PaymentParams` | 결제 파라미터 |
-| `onComplete` | `Action<PaymentResult>` | 결제 완료 콜백 |
+- Editor에서는 시스템 브라우저가 열리며, 결제 결과 콜백을 받을 수 없습니다
+- 프로덕션 배포 전 `environment`를 `Prod`로 변경하세요
+- iOS/Android에서는 반드시 URL Scheme을 등록해야 콜백을 받을 수 있습니다
 
-#### `HandleDeepLink(url)`
+## 지원
 
-Deep Link를 처리합니다. 앱/PC에서 Deep Link 수신 시 호출합니다.
-
-### PaymentParams
-
-| 속성 | 타입 | 필수 | 설명 |
-|------|------|------|------|
-| `OrderId` | `string` | ✅ | 주문 ID |
-| `Amount` | `decimal` | ✅ | 결제 금액 |
-| `Currency` | `string` | | 통화 (기본: USD) |
-| `IdpToken` | `string` | | WebGL 전용: IdP Token |
-
-### PaymentResult
-
-| 속성 | 타입 | 설명 |
-|------|------|------|
-| `Status` | `PaymentStatus` | `Success`, `Failed`, `Cancelled` |
-| `txId` | `string` | 블록체인 트랜잭션 해시 |
-| `paymentId` | `string` | Setto 결제 ID |
-| `error` | `string` | 에러 메시지 |
-
-### SettoErrorCode
-
-| 값 | 설명 |
-|----|------|
-| `UserCancelled` | 사용자 취소 |
-| `PaymentFailed` | 결제 실패 |
-| `InsufficientBalance` | 잔액 부족 |
-| `TransactionRejected` | 트랜잭션 거부 |
-| `NetworkError` | 네트워크 오류 |
-| `SessionExpired` | 세션 만료 |
-| `InvalidParams` | 잘못된 파라미터 |
-| `InvalidMerchant` | 유효하지 않은 고객사 |
-
-## 보안 참고사항
-
-1. **결제 결과는 서버에서 검증 필수**: SDK에서 반환하는 결과는 UX 피드백용입니다. 실제 결제 완료 여부는 고객사 서버에서 Setto API를 통해 검증해야 합니다.
-
-2. **Custom URL Scheme 보안**: 다른 앱이 동일한 Scheme을 등록할 수 있으므로, 결제 결과는 반드시 서버에서 검증하세요.
-
-## License
-
-MIT
+- 문서: https://docs.settopay.com/sdk/unity
+- 이슈: https://github.com/anthropics/setto-sdk-unity/issues

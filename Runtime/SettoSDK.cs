@@ -1,41 +1,71 @@
 using System;
-using System.Collections.Generic;
+using System.Collections;
 using System.Runtime.InteropServices;
 using UnityEngine;
 using UnityEngine.Networking;
 
 namespace Setto.SDK
 {
-    /// <summary>
-    /// Setto Unity SDK
-    ///
-    /// 앱/PC: 시스템 브라우저 + Custom URL Scheme
-    /// WebGL: iframe + postMessage
-    /// </summary>
+    // MARK: - Types
+
+    public enum SettoEnvironment
+    {
+        Dev,
+        Prod
+    }
+
+    [Serializable]
+    public class SettoConfig
+    {
+        public string merchantId;
+        public SettoEnvironment environment;
+        public string idpToken; // IdP 토큰 (있으면 자동로그인)
+        public bool debug;
+
+        public string BaseURL => environment == SettoEnvironment.Dev
+            ? "https://dev-wallet.settopay.com"
+            : "https://wallet.settopay.com";
+
+        /// <summary>
+        /// URL Scheme (딥링크 콜백용)
+        /// 형식: setto-{merchantId}://callback
+        /// </summary>
+        public string URLScheme => $"setto-{merchantId}";
+    }
+
+    public enum PaymentStatus
+    {
+        Success = 0,
+        Failed = 1,
+        Cancelled = 2
+    }
+
+    [Serializable]
+    public class PaymentResult
+    {
+        public PaymentStatus status;
+        public string paymentId;
+        public string txHash;
+        public string error;
+    }
+
+    [Serializable]
+    public class PaymentInfo
+    {
+        public string paymentId;
+        public string status;
+        public string amount;
+        public string currency;
+        public string txHash;
+        public long createdAt;
+        public long completedAt;
+    }
+
+    // MARK: - SDK
+
     public class SettoSDK : MonoBehaviour
     {
         private static SettoSDK _instance;
-
-        private string _merchantId;
-        private string _returnScheme;
-        private SettoEnvironment _environment;
-        private Action<PaymentResult> _onComplete;
-
-        #region WebGL External Functions
-
-#if UNITY_WEBGL && !UNITY_EDITOR
-        [DllImport("__Internal")]
-        private static extern void SettoOpenPayment(string merchantId, string orderId, string amount, string currency, string idpToken, string baseUrl);
-
-        [DllImport("__Internal")]
-        private static extern void SettoClosePayment();
-#endif
-
-        #endregion
-
-        /// <summary>
-        /// 싱글톤 인스턴스
-        /// </summary>
         public static SettoSDK Instance
         {
             get
@@ -50,118 +80,293 @@ namespace Setto.SDK
             }
         }
 
+        private SettoConfig _config;
+        private Action<PaymentResult> _pendingCallback;
+
+        // MARK: - Platform Native Imports
+
+#if UNITY_WEBGL && !UNITY_EDITOR
+        [DllImport("__Internal")]
+        private static extern void SettoSDK_OpenPayment(string url, string callbackObjectName);
+
+        [DllImport("__Internal")]
+        private static extern void SettoSDK_ClosePayment();
+#endif
+
+#if UNITY_IOS && !UNITY_EDITOR
+        [DllImport("__Internal")]
+        private static extern void SettoSDK_iOS_OpenPayment(string url, string callbackObjectName);
+
+        [DllImport("__Internal")]
+        private static extern void SettoSDK_iOS_ClosePayment();
+
+        [DllImport("__Internal")]
+        private static extern void SettoSDK_iOS_HandleURL(string url);
+#endif
+
+        // MARK: - Public API
+
         /// <summary>
         /// SDK 초기화
         /// </summary>
-        /// <param name="merchantId">고객사 ID</param>
-        /// <param name="environment">환경 설정</param>
-        /// <param name="returnScheme">Custom URL Scheme (WebGL에서는 무시됨)</param>
-        public void Initialize(string merchantId, SettoEnvironment environment, string returnScheme = null)
+        public void Initialize(SettoConfig config)
         {
-            _merchantId = merchantId;
-            _environment = environment;
-            _returnScheme = returnScheme ?? "";
-        }
+            _config = config;
+            DebugLog($"Initialized - merchantId: {config.merchantId}, environment: {config.environment}");
 
-        /// <summary>
-        /// 결제 창을 열고 결제를 진행합니다.
-        /// </summary>
-        /// <param name="params">결제 파라미터</param>
-        /// <param name="onComplete">결제 완료 콜백</param>
-        public void OpenPayment(PaymentParams @params, Action<PaymentResult> onComplete)
-        {
-            _onComplete = onComplete;
-
-#if UNITY_WEBGL && !UNITY_EDITOR
-            // WebGL: iframe + postMessage
-            SettoOpenPayment(
-                _merchantId,
-                @params.OrderId,
-                @params.Amount.ToString(),
-                @params.Currency ?? "",
-                @params.IdpToken ?? "",
-                _environment.GetBaseUrl()
-            );
-#else
-            // 앱/PC: 시스템 브라우저 + Scheme
-            var url = BuildPaymentUrl(@params);
-            Application.OpenURL(url);
+#if UNITY_ANDROID && !UNITY_EDITOR
+            DebugLog("Android: Make sure to register URL Scheme in AndroidManifest.xml");
+#elif UNITY_IOS && !UNITY_EDITOR
+            DebugLog("iOS: Make sure to register URL Scheme in Info.plist");
 #endif
         }
 
         /// <summary>
-        /// Deep Link 처리
-        /// 앱/PC에서 Deep Link로 결과를 수신할 때 호출합니다.
+        /// 결제 요청
+        /// IdP Token 유무에 따라 자동로그인 여부가 결정됩니다.
+        /// - IdP Token 없음: Setto 로그인 필요
+        /// - IdP Token 있음: PaymentToken 발급 후 자동로그인
         /// </summary>
-        /// <param name="url">Deep Link URL (예: mygame://setto-result?status=success&txId=xxx)</param>
-        public void HandleDeepLink(string url)
+        public void OpenPayment(string amount, string orderId, Action<PaymentResult> callback)
         {
-            var queryParams = ParseQueryString(url);
-
-            var result = new PaymentResult
+            if (_config == null)
             {
-                status = queryParams.TryGetValue("status", out var status) ? status : "failed",
-                txId = queryParams.TryGetValue("txId", out var txId) ? txId : null,
-                paymentId = queryParams.TryGetValue("paymentId", out var paymentId) ? paymentId : null,
-                error = queryParams.TryGetValue("error", out var error) ? error : null
-            };
+                callback?.Invoke(new PaymentResult
+                {
+                    status = PaymentStatus.Failed,
+                    error = "SDK not initialized. Call Initialize() first."
+                });
+                return;
+            }
 
-            _onComplete?.Invoke(result);
-            _onComplete = null;
+            if (!string.IsNullOrEmpty(_config.idpToken))
+            {
+                // IdP Token 있음 → PaymentToken 발급 → Fragment로 전달
+                DebugLog("Requesting PaymentToken for auto-login...");
+                StartCoroutine(RequestPaymentTokenAndOpen(amount, orderId, callback));
+            }
+            else
+            {
+                // IdP Token 없음 → Query param으로 직접 전달
+                var url = BuildPaymentURL(amount, orderId);
+                DebugLog($"Opening payment (Setto login required): {url}");
+                OpenPaymentInternal(url, callback);
+            }
         }
 
         /// <summary>
-        /// WebGL에서 JavaScript가 호출하는 콜백
-        /// (jslib에서 SendMessage로 호출됨)
+        /// 초기화 여부 확인
         /// </summary>
-        public void OnPaymentResult(string json)
+        public bool IsInitialized => _config != null;
+
+        /// <summary>
+        /// 결제 취소 (수동)
+        /// </summary>
+        public void ClosePayment()
         {
-            var result = JsonUtility.FromJson<PaymentResult>(json);
-            _onComplete?.Invoke(result);
-            _onComplete = null;
+#if UNITY_WEBGL && !UNITY_EDITOR
+            SettoSDK_ClosePayment();
+#elif UNITY_IOS && !UNITY_EDITOR
+            SettoSDK_iOS_ClosePayment();
+#elif UNITY_ANDROID && !UNITY_EDITOR
+            using (var plugin = new AndroidJavaClass("com.setto.sdk.SettoSDK"))
+            {
+                plugin.CallStatic("closePayment");
+            }
+#endif
+            _pendingCallback?.Invoke(new PaymentResult { status = PaymentStatus.Cancelled });
+            _pendingCallback = null;
         }
 
-        private string BuildPaymentUrl(PaymentParams @params)
+        /// <summary>
+        /// URL Scheme 딥링크 처리 (iOS/Android)
+        /// AppDelegate(iOS) 또는 Activity(Android)에서 호출
+        /// </summary>
+        public void HandleDeepLink(string url)
         {
-            var baseUrl = _environment.GetBaseUrl();
-            var encodedMerchantId = UnityWebRequest.EscapeURL(_merchantId);
-            var encodedOrderId = UnityWebRequest.EscapeURL(@params.OrderId);
-            var encodedScheme = UnityWebRequest.EscapeURL(_returnScheme);
+            DebugLog($"HandleDeepLink: {url}");
 
-            var url = $"{baseUrl}/pay?merchantId={encodedMerchantId}&orderId={encodedOrderId}&amount={@params.Amount}&returnScheme={encodedScheme}";
-
-            if (!string.IsNullOrEmpty(@params.Currency))
+#if UNITY_IOS && !UNITY_EDITOR
+            SettoSDK_iOS_HandleURL(url);
+#elif UNITY_ANDROID && !UNITY_EDITOR
+            using (var plugin = new AndroidJavaClass("com.setto.sdk.SettoSDK"))
             {
-                var encodedCurrency = UnityWebRequest.EscapeURL(@params.Currency);
-                url += $"&currency={encodedCurrency}";
+                plugin.CallStatic("handleURL", url);
             }
+#endif
+        }
+
+        // MARK: - Internal
+
+        private string BuildPaymentURL(string amount, string orderId)
+        {
+            var url = $"{_config.BaseURL}/pay/wallet?merchant_id={Uri.EscapeDataString(_config.merchantId)}&amount={Uri.EscapeDataString(amount)}";
+
+            if (!string.IsNullOrEmpty(orderId))
+            {
+                url += $"&order_id={Uri.EscapeDataString(orderId)}";
+            }
+
+            // 모바일: 콜백 URL Scheme 추가
+#if (UNITY_IOS || UNITY_ANDROID) && !UNITY_EDITOR
+            url += $"&callback_scheme={Uri.EscapeDataString(_config.URLScheme)}";
+#endif
 
             return url;
         }
 
-        /// <summary>
-        /// URL 쿼리 파라미터 파싱
-        /// </summary>
-        private static Dictionary<string, string> ParseQueryString(string url)
+        private IEnumerator RequestPaymentTokenAndOpen(string amount, string orderId, Action<PaymentResult> callback)
         {
-            var result = new Dictionary<string, string>();
+            var tokenUrl = $"{_config.BaseURL}/api/external/payment/token";
 
-            int queryStart = url.IndexOf('?');
-            if (queryStart < 0) return result;
-
-            string query = url.Substring(queryStart + 1);
-            foreach (var pair in query.Split('&'))
+            var body = new PaymentTokenRequest
             {
-                var parts = pair.Split('=');
-                if (parts.Length == 2)
+                merchantId = _config.merchantId,
+                amount = amount,
+                orderId = orderId,
+                idpToken = _config.idpToken
+            };
+            var jsonBody = JsonUtility.ToJson(body);
+
+            using (var request = new UnityWebRequest(tokenUrl, "POST"))
+            {
+                byte[] bodyRaw = System.Text.Encoding.UTF8.GetBytes(jsonBody);
+                request.uploadHandler = new UploadHandlerRaw(bodyRaw);
+                request.downloadHandler = new DownloadHandlerBuffer();
+                request.SetRequestHeader("Content-Type", "application/json");
+
+                yield return request.SendWebRequest();
+
+                if (request.result != UnityWebRequest.Result.Success)
                 {
-                    string key = UnityWebRequest.UnEscapeURL(parts[0]);
-                    string value = UnityWebRequest.UnEscapeURL(parts[1]);
-                    result[key] = value;
+                    DebugLog($"PaymentToken request failed: {request.responseCode} - {request.error}");
+                    callback?.Invoke(new PaymentResult
+                    {
+                        status = PaymentStatus.Failed,
+                        error = $"Token request failed: {request.responseCode}"
+                    });
+                    yield break;
                 }
+
+                var response = JsonUtility.FromJson<PaymentTokenResponse>(request.downloadHandler.text);
+
+                if (string.IsNullOrEmpty(response.paymentToken))
+                {
+                    DebugLog("PaymentToken is empty in response");
+                    callback?.Invoke(new PaymentResult
+                    {
+                        status = PaymentStatus.Failed,
+                        error = "PaymentToken not received"
+                    });
+                    yield break;
+                }
+
+                // Fragment로 전달 (보안: 서버 로그에 남지 않음)
+                var url = $"{_config.BaseURL}/pay/wallet#pt={Uri.EscapeDataString(response.paymentToken)}";
+
+                // 모바일: 콜백 URL Scheme 추가 (Fragment 뒤에)
+#if (UNITY_IOS || UNITY_ANDROID) && !UNITY_EDITOR
+                url += $"&callback_scheme={Uri.EscapeDataString(_config.URLScheme)}";
+#endif
+
+                DebugLog("Opening payment with auto-login");
+                OpenPaymentInternal(url, callback);
+            }
+        }
+
+        [Serializable]
+        private class PaymentTokenRequest
+        {
+            public string merchantId;
+            public string amount;
+            public string orderId;
+            public string idpToken;
+        }
+
+        [Serializable]
+        private class PaymentTokenResponse
+        {
+            public string paymentToken;
+        }
+
+        private void OpenPaymentInternal(string url, Action<PaymentResult> callback)
+        {
+            _pendingCallback = callback;
+
+#if UNITY_WEBGL && !UNITY_EDITOR
+            // WebGL: iframe으로 열기
+            SettoSDK_OpenPayment(url, gameObject.name);
+
+#elif UNITY_IOS && !UNITY_EDITOR
+            // iOS: SFSafariViewController로 열기
+            SettoSDK_iOS_OpenPayment(url, gameObject.name);
+
+#elif UNITY_ANDROID && !UNITY_EDITOR
+            // Android: Chrome Custom Tabs로 열기
+            using (var plugin = new AndroidJavaClass("com.setto.sdk.SettoSDK"))
+            {
+                plugin.CallStatic("openPayment", url, gameObject.name);
             }
 
-            return result;
+#else
+            // Editor / Desktop: 시스템 브라우저로 열기
+            DebugLog("Opening in system browser (callback not supported in Editor)");
+            Application.OpenURL(url);
+
+            // Editor에서는 콜백을 받을 수 없으므로 바로 취소 처리
+            callback?.Invoke(new PaymentResult
+            {
+                status = PaymentStatus.Cancelled,
+                error = "Payment opened in browser. Callback not supported in Editor."
+            });
+            _pendingCallback = null;
+#endif
+        }
+
+        /// <summary>
+        /// 네이티브 플러그인에서 호출되는 콜백
+        /// </summary>
+        public void OnPaymentResult(string json)
+        {
+            try
+            {
+                DebugLog($"OnPaymentResult: {json}");
+                var result = JsonUtility.FromJson<PaymentResult>(json);
+                _pendingCallback?.Invoke(result);
+            }
+            catch (Exception e)
+            {
+                DebugLog($"Error parsing payment result: {e.Message}");
+                _pendingCallback?.Invoke(new PaymentResult
+                {
+                    status = PaymentStatus.Failed,
+                    error = $"Parse error: {e.Message}"
+                });
+            }
+            finally
+            {
+                _pendingCallback = null;
+            }
+        }
+
+        private void DebugLog(string message)
+        {
+            if (_config?.debug == true)
+            {
+                Debug.Log($"[SettoSDK] {message}");
+            }
+        }
+
+        // MARK: - Deep Link Handling (Unity 2019.3+)
+
+        private void OnApplicationPause(bool pauseStatus)
+        {
+            if (!pauseStatus)
+            {
+                // 앱이 foreground로 돌아올 때
+                // Android에서는 onNewIntent가 자동으로 호출되지 않을 수 있음
+                DebugLog("App resumed from background");
+            }
         }
     }
 }
