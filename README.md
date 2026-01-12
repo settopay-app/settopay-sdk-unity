@@ -111,7 +111,7 @@ public void HandlePayment()
         OrderId = "order-123",
         Amount = 100.00m,
         Currency = "USD",       // 선택
-        IdpToken = idpToken     // WebGL 전용 (선택)
+        IdpToken = idpToken     // WebGL 전용 (선택, 아래 참고)
     };
 
     SettoSDK.Instance.OpenPayment(paymentParams, result =>
@@ -134,6 +134,19 @@ public void HandlePayment()
     });
 }
 ```
+
+### WebGL에서 IdpToken 동작
+
+WebGL 빌드에서 `IdpToken` 파라미터는 선택사항입니다:
+
+| IdpToken | wallet.settopay.com 동작 |
+|----------|-------------------------|
+| **전달됨** | IdP Token 검증 → 즉시 결제 화면 표시 (로그인 불필요) |
+| **미전달** | Setto 자체 OAuth 로그인 화면 표시 → 로그인 후 결제 진행 |
+
+자체 IdP(Firebase, Cognito 등)가 없는 경우 IdpToken을 전달하지 않으면 Setto 자체 로그인으로 진행됩니다.
+
+> **참고**: 앱/PC 빌드에서는 시스템 브라우저가 열리므로 브라우저 세션이 유지됩니다. IdpToken은 WebGL 전용입니다.
 
 ### Deep Link 처리 (앱/PC)
 
