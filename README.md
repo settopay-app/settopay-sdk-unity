@@ -38,7 +38,6 @@ void Start()
 {
     var config = new SettoConfig
     {
-        merchantId = "YOUR_MERCHANT_ID",
         environment = SettoEnvironment.Dev, // 또는 Prod
         // idpToken = "firebase-id-token", // 선택: 있으면 자동로그인
         debug = true
@@ -54,6 +53,7 @@ void Start()
 public void OnPayButtonClicked()
 {
     SettoSDK.Instance.OpenPayment(
+        merchantId: "YOUR_MERCHANT_ID",  // 상점 ID (멀티 머천트 지원)
         amount: "10",           // USD 금액
         orderId: "order-123",   // 선택: 주문 ID
         callback: OnPaymentResult
@@ -84,7 +84,6 @@ private void OnPaymentResult(PaymentResult result)
 ```csharp
 var config = new SettoConfig
 {
-    merchantId = "YOUR_MERCHANT_ID",
     environment = SettoEnvironment.Dev,
     idpToken = firebaseIdToken, // Firebase ID Token
     debug = true
