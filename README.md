@@ -55,7 +55,6 @@ public void OnPayButtonClicked()
     SettoSDK.Instance.OpenPayment(
         merchantId: "YOUR_MERCHANT_ID",  // 상점 ID (멀티 머천트 지원)
         amount: "10",           // USD 금액
-        orderId: "order-123",   // 선택: 주문 ID
         callback: OnPaymentResult
     );
 }

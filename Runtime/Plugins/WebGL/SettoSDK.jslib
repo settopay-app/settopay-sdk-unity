@@ -3,26 +3,20 @@ mergeInto(LibraryManager.library, {
     var url = UTF8ToString(urlPtr);
     var callbackObjectName = UTF8ToString(callbackObjectNamePtr);
 
-    // iframe 생성
+    // overlay 생성 (전체 화면, 투명)
     var overlay = document.createElement('div');
     overlay.id = 'setto-overlay';
-    overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:99999;display:flex;align-items:center;justify-content:center;';
+    overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:transparent;z-index:99999;pointer-events:none;';
 
+    // iframe 생성 (전체 화면 - 내부에서 바닥 모달 스타일 처리)
     var iframe = document.createElement('iframe');
     iframe.id = 'setto-iframe';
     iframe.src = url;
-    iframe.style.cssText = 'width:420px;height:680px;max-width:95vw;max-height:90vh;border:none;border-radius:16px;background:white;';
+    iframe.allow = 'clipboard-write';
+    iframe.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;border:none;background:transparent;pointer-events:auto;';
 
     overlay.appendChild(iframe);
     document.body.appendChild(overlay);
-
-    // 오버레이 클릭 시 취소
-    overlay.addEventListener('click', function(e) {
-      if (e.target === overlay) {
-        cleanup();
-        sendResult({ status: 2 }); // Cancelled
-      }
-    });
 
     // postMessage 수신
     function messageHandler(event) {

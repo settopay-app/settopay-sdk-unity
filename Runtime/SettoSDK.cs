@@ -18,7 +18,6 @@ namespace Setto.SDK
     public class SettoConfig
     {
         public SettoEnvironment environment;
-        public string idpToken; // IdP 토큰 (있으면 자동로그인)
         public bool debug;
 
         public string BaseURL => environment == SettoEnvironment.Dev
@@ -116,11 +115,15 @@ namespace Setto.SDK
 
         /// <summary>
         /// 결제 요청
-        /// IdP Token 유무에 따라 자동로그인 여부가 결정됩니다.
+        /// 항상 PaymentToken을 발급받아서 결제 페이지로 전달합니다.
         /// - IdP Token 없음: Setto 로그인 필요
-        /// - IdP Token 있음: PaymentToken 발급 후 자동로그인
+        /// - IdP Token 있음: 자동로그인
         /// </summary>
-        public void OpenPayment(string merchantId, string amount, string orderId, Action<PaymentResult> callback)
+        /// <param name="merchantId">머천트 ID</param>
+        /// <param name="amount">결제 금액</param>
+        /// <param name="idpToken">IdP 토큰 (선택, 있으면 자동로그인)</param>
+        /// <param name="callback">결제 결과 콜백</param>
+        public void OpenPayment(string merchantId, string amount, string idpToken, Action<PaymentResult> callback)
         {
             if (_config == null)
             {
@@ -132,19 +135,16 @@ namespace Setto.SDK
                 return;
             }
 
-            if (!string.IsNullOrEmpty(_config.idpToken))
-            {
-                // IdP Token 있음 → PaymentToken 발급 → Fragment로 전달
-                DebugLog("Requesting PaymentToken for auto-login...");
-                StartCoroutine(RequestPaymentTokenAndOpen(merchantId, amount, orderId, callback));
-            }
-            else
-            {
-                // IdP Token 없음 → Query param으로 직접 전달
-                var url = BuildPaymentURL(merchantId, amount, orderId);
-                DebugLog($"Opening payment (Setto login required): {url}");
-                OpenPaymentInternal(url, callback);
-            }
+            DebugLog("Requesting PaymentToken...");
+            StartCoroutine(RequestPaymentTokenAndOpen(merchantId, amount, idpToken, callback));
+        }
+
+        /// <summary>
+        /// 결제 요청 (IdP Token 없이)
+        /// </summary>
+        public void OpenPayment(string merchantId, string amount, Action<PaymentResult> callback)
+        {
+            OpenPayment(merchantId, amount, null, callback);
         }
 
         /// <summary>
@@ -191,24 +191,7 @@ namespace Setto.SDK
 
         // MARK: - Internal
 
-        private string BuildPaymentURL(string merchantId, string amount, string orderId)
-        {
-            var url = $"{_config.BaseURL}/pay/wallet?merchant_id={Uri.EscapeDataString(merchantId)}&amount={Uri.EscapeDataString(amount)}";
-
-            if (!string.IsNullOrEmpty(orderId))
-            {
-                url += $"&order_id={Uri.EscapeDataString(orderId)}";
-            }
-
-            // 모바일: 콜백 URL Scheme 추가
-#if (UNITY_IOS || UNITY_ANDROID) && !UNITY_EDITOR
-            url += $"&callback_scheme={Uri.EscapeDataString($"setto-{merchantId}")}";
-#endif
-
-            return url;
-        }
-
-        private IEnumerator RequestPaymentTokenAndOpen(string merchantId, string amount, string orderId, Action<PaymentResult> callback)
+        private IEnumerator RequestPaymentTokenAndOpen(string merchantId, string amount, string idpToken, Action<PaymentResult> callback)
         {
             var tokenUrl = $"{_config.BaseURL}/api/external/payment/token";
 
@@ -216,8 +199,7 @@ namespace Setto.SDK
             {
                 merchant_id = merchantId,
                 amount = amount,
-                order_id = orderId,
-                idp_token = _config.idpToken
+                idp_token = idpToken
             };
             var jsonBody = JsonUtility.ToJson(body);
 
@@ -262,7 +244,7 @@ namespace Setto.SDK
                 url += $"&callback_scheme={Uri.EscapeDataString($"setto-{merchantId}")}";
 #endif
 
-                DebugLog("Opening payment with auto-login");
+                DebugLog("Opening payment page");
                 OpenPaymentInternal(url, callback);
             }
         }
@@ -272,7 +254,6 @@ namespace Setto.SDK
         {
             public string merchant_id;
             public string amount;
-            public string order_id;
             public string idp_token;
         }
 
