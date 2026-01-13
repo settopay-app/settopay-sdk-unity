@@ -31,7 +31,12 @@ mergeInto(LibraryManager.library, {
         sendResult({
           status: 0, // Success
           paymentId: data.paymentId || '',
-          txHash: data.txHash || ''
+          txHash: data.txHash || '',
+          fromAddress: data.fromAddress || '',
+          toAddress: data.toAddress || '',
+          amount: data.amount || '',
+          chainId: data.chainId || 0,
+          tokenSymbol: data.tokenSymbol || ''
         });
       } else if (type === 'SETTO_PAYMENT_FAILED') {
         cleanup();
