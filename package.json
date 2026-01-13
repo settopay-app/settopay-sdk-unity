@@ -1,6 +1,6 @@
 {
   "name": "com.setto.sdk",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "displayName": "Setto SDK",
   "description": "Setto External SDK for Unity - Integrate Setto payments into your Unity WebGL application",
   "unity": "2021.3",

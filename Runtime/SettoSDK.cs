@@ -38,6 +38,16 @@ namespace Setto.SDK
         public PaymentStatus status;
         public string paymentId;
         public string txHash;
+        /// <summary>결제자 지갑 주소 (서버에서 반환)</summary>
+        public string fromAddress;
+        /// <summary>결산 수신자 주소 (pool이 아닌 최종 수신자, 서버에서 반환)</summary>
+        public string toAddress;
+        /// <summary>결제 금액 (USD, 예: "10.00", 서버에서 반환)</summary>
+        public string amount;
+        /// <summary>체인 ID (예: 8453, 56, 900001, 서버에서 반환)</summary>
+        public int chainId;
+        /// <summary>토큰 심볼 (예: "USDC", "USDT", 서버에서 반환)</summary>
+        public string tokenSymbol;
         public string error;
     }
 
@@ -223,11 +233,12 @@ namespace Setto.SDK
                     yield break;
                 }
 
+                DebugLog($"Response: {request.downloadHandler.text}");
                 var response = JsonUtility.FromJson<PaymentTokenResponse>(request.downloadHandler.text);
 
                 if (string.IsNullOrEmpty(response.payment_token))
                 {
-                    DebugLog("PaymentToken is empty in response");
+                    DebugLog($"PaymentToken is empty. Raw response: {request.downloadHandler.text}");
                     callback?.Invoke(new PaymentResult
                     {
                         status = PaymentStatus.Failed,
