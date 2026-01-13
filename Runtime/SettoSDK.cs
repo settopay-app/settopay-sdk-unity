@@ -20,9 +20,15 @@ namespace Setto.SDK
         public SettoEnvironment environment;
         public bool debug;
 
-        public string BaseURL => environment == SettoEnvironment.Dev
+        /// <summary>API 서버 (백엔드 gRPC-Gateway)</summary>
+        public string ApiURL => environment == SettoEnvironment.Dev
             ? "https://dev-wallet.settopay.com"
             : "https://wallet.settopay.com";
+
+        /// <summary>웹앱 (프론트엔드 결제 페이지)</summary>
+        public string WebAppURL => environment == SettoEnvironment.Dev
+            ? "https://dev-app.settopay.com"
+            : "https://app.settopay.com";
     }
 
     public enum PaymentStatus
@@ -203,7 +209,7 @@ namespace Setto.SDK
 
         private IEnumerator RequestPaymentTokenAndOpen(string merchantId, string amount, string idpToken, Action<PaymentResult> callback)
         {
-            var tokenUrl = $"{_config.BaseURL}/api/external/payment/token";
+            var tokenUrl = $"{_config.ApiURL}/api/external/payment/token";
 
             var body = new PaymentTokenRequest
             {
@@ -248,7 +254,7 @@ namespace Setto.SDK
                 }
 
                 // Fragment로 전달 (보안: 서버 로그에 남지 않음)
-                var url = $"{_config.BaseURL}/pay/wallet#pt={Uri.EscapeDataString(response.payment_token)}";
+                var url = $"{_config.WebAppURL}/pay/wallet#pt={Uri.EscapeDataString(response.payment_token)}";
 
                 // 모바일: 콜백 URL Scheme 추가 (Fragment 뒤에)
 #if (UNITY_IOS || UNITY_ANDROID) && !UNITY_EDITOR
